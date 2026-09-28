@@ -323,15 +323,103 @@ reproduced. I changed the default so the corpus choice is committed.
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Retrieved chunk contains the answer | 4 of 5 |  |  |  |  |
-| 2. Every answer names a source | 5 of 5 |  |  |  |  |
-| 3. Gate stops out-of-corpus questions | 4 of 5 |  |  |  |  |
-| 4. No chunk is cut mid-sentence | 0 of 23 |  |  |  |  |
-| 5. No in-scope question comes back refused | 0 of 5 |  |  |  |  |
+| 1. Retrieved chunk contains the answer | 4 of 5 | 5 of 5 | 5 of 5 | 5 of 5 | MET |
+| 2. Every answer names a source | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 | MET |
+| 3. Gate stops out-of-corpus questions | 4 of 5 | 5 of 5 | 5 of 5 | 5 of 5 | MET |
+| 4. No chunk is cut mid-sentence | 0 of 23 | 0 of 23 | 0 of 23 | 0 of 23 | MET |
+| 5. No in-scope question comes back refused | 0 of 5 | 0 of 5 | 0 of 5 | 0 of 5 | MET |
 
-<!-- Underneath, paste the REAL output for each criterion from one of your
-     runs — the actual text your system produced, not a description of it.
-     Name the file and function that produced it. -->
+Source run: `results/run_2026-09-28_1429_before.md`, written by
+`run_eval.py::main` at 14:29 on 2026-09-28 — corpus `advice_threads`, top-k 3,
+cutoff 0.6, three runs per question, caching off. That file is one row per
+question; this table is one row per criterion, so the counts below are that
+file aggregated.
+
+Two rows are measured in one pass rather than three, and the same number goes
+in all three columns. Criterion 3 is deterministic: retrieval doesn't vary and
+the gate is a comparison against a fixed number, so one pass over the
+out-of-scope list is the whole measurement. Criterion 4 isn't produced by
+`run_eval.py` at all — it's a property of the index, not of a question, so it
+comes from `chunker.py::split_documents` and is checked across all 23 chunks.
+
+### Real output
+
+**Criterion 1 — retrieved chunks contain the answer.** Scored off the
+`Sources retrieved` line, which `run_eval.py::main` prints from
+`store.py::search` before generation. Run 1, the question I'd predicted would
+be the one to miss:
+
+```
+### When do small local employers hire summer interns? — run 1
+
+- Best distance: 0.3418 (passed the gate)
+- Sources retrieved: thread_first_gen.txt, thread_internship_timing.txt, thread_laundry_timing.txt
+```
+
+`thread_internship_timing.txt` is the thread holding the answer, and it came
+back at rank 1 in all three runs. Same for the other four questions.
+
+**Criterion 2 — every answer names a source.** Produced by
+`generate.py::answer_from_chunks`. All 15 answers name a file; the model picks
+its own format, which is why these three are the same claim written three ways:
+
+```
+According to *thread_laptop_specs.txt*, 16GB of RAM is recommended as the number worth paying for. One reply notes that 8GB can work for a couple of years, but struggled by the final project.
+```
+
+```
+Small and local places hire summer interns in February and March (*thread_internship_timing.txt*).
+```
+
+```
+No, it is not weird to go to office hours without a specific question; one commenter states that saying you are following the lectures but do not understand the shape of it is completely normal. 
+
+Source: `thread_office_hours_etiquette.txt`
+```
+
+**Criterion 3 — the gate stops out-of-corpus questions.** Produced by
+`run_eval.py::check_out_of_scope` against `gate.py`. Refused 5 of 5:
+
+| Out-of-scope question | Best distance | Gate |
+|---|---|---|
+| What is the capital of Mongolia? | 0.948 | refused |
+| How do I change the oil in a diesel engine? | 0.930 | refused |
+| Who won the 1994 World Cup? | 0.952 | refused |
+| What is the recommended dosage of ibuprofen for a headache? | 0.828 | refused |
+| How do I write a for loop in Rust? | 0.871 | refused |
+
+What a refusal actually looks like, from `python app.py ask "Who won the 1994
+World Cup?"`:
+
+```
+  (best distance 0.952, cutoff 0.6)
+
+I don't have enough information about that.
+
+0 model calls this session
+```
+
+The last line is the part worth noting: the gate refuses before the model is
+called, so an out-of-corpus question costs nothing.
+
+**Criterion 4 — no chunk is cut mid-sentence.** Measured over the whole index
+rather than a sample, by calling `chunker.py::split_documents` directly:
+
+```
+total chunks: 23
+not starting at a thread header: 0
+not ending on sentence-final punctuation: 0
+shortest: 317 longest: 793
+```
+
+The shortest chunk is 317 characters. The three failures I wrote this criterion
+about — `t.`, `nd it's the only reason…` and `) ---` — are gone, because the
+reply-boundary splitter can't produce them.
+
+**Criterion 5 — no in-scope question comes back refused.** Scored by searching
+all 15 answers for the phrase "don't have enough information". Zero hits. Every
+in-scope question cleared the gate with room: the closest was the bike question
+at 0.4206 against a cutoff of 0.6.
 
 ## Verdicts
 
@@ -346,11 +434,36 @@ reproduced. I changed the default so the corpus choice is committed.
 
 | # | Criterion | Verdict | How I decided |
 |---|---|---|---|
-| 1 |  |  |  |
-| 2 |  |  |  |
-| 3 |  |  |  |
-| 4 |  |  |  |
-| 5 |  |  |  |
+| 1 | Retrieved chunks contain the answer | MET | 5 of 5 against a target of 4 of 5, and the same 5 in all three runs. Not close, and not close in the direction I expected — see below. |
+| 2 | Every answer names a source | MET | 15 of 15 answers name a file. I counted the answer text, not the `Sources retrieved` line, because that line is printed by retrieval whether the model uses it or not. |
+| 3 | Gate stops out-of-corpus questions | MET | 5 of 5 refused against a target of 4 of 5. The closest out-of-scope question scored 0.828 against a 0.6 cutoff, so nothing was near the boundary. |
+| 4 | No chunk is cut mid-sentence | MET | 0 of 23 across the whole index, not a sample. Checked both ends of every chunk: none starts mid-reply, none ends without sentence-final punctuation. |
+| 5 | No in-scope question comes back refused | MET | 0 refusals of 5. Checked by the rule I wrote in criteria.md — the literal phrase "don't have enough information" in the printed answer — rather than by reading for tone. |
+
+All five met, which I want to be careful about rather than pleased with.
+
+**Criterion 1 is the one that actually tells me something.** I wrote it
+expecting to spend my one allowed miss on "When do small local employers hire
+summer interns?", because its answer is a single month inside a threaded reply
+and my old 800-character chunker was severing three chunks mid-sentence. It
+came back at rank 1, distance 0.3418, in all three runs. That isn't the target
+being loose — it's the Milestone 3 chunker fix landing on exactly the question
+I'd predicted it would rescue. The prediction and the repair are two entries in
+criteria.md written a day apart, and this run is where they met.
+
+**Criteria 1 and 5 were supposed to fail together and didn't.** I'd written
+that if retrieval missed the internship question, the model would get chunks
+without the month in them and would correctly refuse, taking criterion 5 down
+with criterion 1. Since retrieval didn't miss, that link was never tested. I
+don't get to claim credit for criterion 5 surviving a pressure it never came
+under.
+
+**Where this leaves the targets.** Three of the five passed by a margin wide
+enough that I should say plainly they were not hard: criterion 3's nearest miss
+is 0.23 from the cutoff, and criterion 4 now holds by construction rather than
+by measurement — the chunker cannot split inside a reply, so there is no run in
+which that row comes back non-zero. Which of these I'd tighten, and to what,
+belongs in Diagnoses below.
 
 ## Diagnoses
 
