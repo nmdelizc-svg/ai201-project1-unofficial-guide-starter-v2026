@@ -330,7 +330,7 @@ reproduced. I changed the default so the corpus choice is committed.
 | 5. No in-scope question comes back refused | 0 of 5 | 0 of 5 | 0 of 5 | 0 of 5 | MET |
 
 Source run: `results/run_2026-09-28_1429_before.md`, written by
-`run_eval.py::main` at 14:29 on 2026-09-28 — corpus `advice_threads`, top-k 3,
+`run_eval.py::main` on 2026-09-28 — corpus `advice_threads`, top-k 3,
 cutoff 0.6, three runs per question, caching off. That file is one row per
 question; this table is one row per criterion, so the counts below are that
 file aggregated.
@@ -423,15 +423,6 @@ at 0.4206 against a cutoff of 0.6.
 
 ## Verdicts
 
-<!-- MET or MISSED for each of the five, against the target you wrote last
-     unit — not a new one. Plus a sentence on how you decided. That sentence
-     matters most where it was close.
-
-     If your target said 4 of 5 and your runs came out 4, 3, 4, that's a MISS.
-     The target has to hold, not show up occasionally.
-
-     Milestone 2. -->
-
 | # | Criterion | Verdict | How I decided |
 |---|---|---|---|
 | 1 | Retrieved chunks contain the answer | MET | 5 of 5 against a target of 4 of 5, and the same 5 in all three runs. Not close, and not close in the direction I expected — see below. |
@@ -485,14 +476,126 @@ belongs in Diagnoses below.
 
      Milestone 3. -->
 
+**I missed nothing. All five criteria were met on the first run.** So there is
+no stage-and-mechanism story to tell about a failure, and the honest version of
+this section is about the measurement rather than the system.
+
+**The targets were safe.** Not all equally, and the way they were safe has a
+single cause rather than five.
+
+Four of my five criteria are scored over questions I wrote myself, after
+reading the corpus, knowing what it contained. Criteria 1, 2 and 5 all run over
+the same five in-scope questions, and criterion 3 runs over five out-of-scope
+ones I picked to be obviously outside it. That is one problem, not four: my test
+set was built to be answerable, so it measured whether the pipeline works on
+easy cases and never went looking for the edge.
+
+### The pattern: my gate was never tested on a hard question
+
+My five OUT_OF_SCOPE questions are the capital of Mongolia, the 1994 World Cup,
+diesel oil changes, ibuprofen dosage, and Rust syntax. Nothing about a
+university. That is what produced the "0.4074 gap with nothing in it" I leaned
+on above, and the claim that 0.6 "sits in open space".
+
+I tested that claim by writing seven questions that are campus-adjacent but
+genuinely not in my 23 threads, and running them through `app.py retrieve`,
+which costs no model calls:
+
+| Near-miss question | Best distance | Nearest thread | Gate at 0.6 |
+|---|---|---|---|
+| How much does a load of laundry cost? | 0.5286 | `thread_laundry_timing.txt` | **passed** |
+| What are the best dorms to live in? | 0.5794 | `thread_study_spots.txt` | **passed** |
+| Where is the campus gym and what are its hours? | 0.5826 | `thread_study_spots.txt` | **passed** |
+| How do I book a counselling appointment? | 0.6201 | `thread_sleep_schedule.txt` | refused |
+| Is the dining hall open on weekends? | 0.6569 | `thread_study_spots.txt` | refused |
+| How do I apply for financial aid? | 0.6854 | `thread_first_gen.txt` | refused |
+| What is the wifi password on campus? | 0.7651 | `thread_study_spots.txt` | refused |
+
+**The band I called empty is populated, and it straddles my cutoff.** Three
+out-of-corpus questions get through a 0.6 gate. The mechanism is the stage I
+never suspected — embedding, not retrieval or chunking. `thread_study_spots.txt`
+is the nearest neighbour for four of these seven, because "campus", "building"
+and "hours" put a question in its neighbourhood regardless of what the question
+is actually asking. `thread_laundry_timing.txt` is about *when machines are
+free*, never about price, and a question about cost still lands 0.5286 from it.
+Topic proximity is not answer containment, and a distance score cannot tell them
+apart.
+
+Criterion 3 is still honestly MET — my five OUT_OF_SCOPE questions really were
+all refused. The finding is that the test could not have discovered this.
+
+### The one thing the passes did tell me
+
+Two of those three leaked questions reached the model, which is the second
+refusal site I described in criterion 5 and said I don't control. It held:
+
+```
+  (best distance 0.529, cutoff 0.6)
+
+Based on the provided documents, there is no mention of how much a load of laundry costs (source: `thread_laundry_timing.txt`).
+```
+
+That is `generate.py::answer_from_chunks` catching what the gate let past — the
+grounding instruction doing the job the distance score couldn't.
+
+It also exposes a hole in my own scoring. Criterion 5 counts a question as
+refused only if the answer contains the literal phrase "don't have enough
+information". That answer is a refusal and does not contain the phrase. My
+0-of-5 for criterion 5 is correct, but the rule that produced it would have
+missed a real refusal if one had happened — so that number is right by luck.
+
+### Which criterion I'd tighten, and to what
+
+**Criterion 3**, from *"at least 4 of 5 out-of-corpus questions refused"* to:
+
+> 5 of 5 refused, where at least 3 of the out-of-scope questions are
+> campus-adjacent topics my corpus does not cover, and no out-of-scope question
+> scores below 0.65.
+
+That version fails on today's numbers, which is the point — the current version
+cannot fail. This is the criterion my improvement below goes after.
+
+Two smaller ones I'd also change, and did not: **criterion 1** should require the
+answer-bearing chunk at **rank 1**, not anywhere in the top 3, because rank 1 was
+already the right thread for all five questions while rank 3 never drops below
+0.7386 — I was scoring a bar three times looser than what my retrieval does.
+And **criterion 4** I would retire rather than tighten: the reply-boundary
+splitter cannot produce a mid-sentence chunk, so 0 of 23 restates the chunker's
+design instead of measuring anything. A number that cannot move is not worth a
+row.
+
 ## The Improvement
 
 **What I changed:**
 
+One line in `config.py`: `THRESHOLD` from **0.6 to 0.475**. Nothing else — same
+chunker, same top-k of 3, same grounding instruction, same corpus, same
+questions.
+
 **Why I picked it:**
 
-<!-- Connect it to a specific diagnosis above in one sentence. If you can't,
-     you picked a fix because it sounded impressive. -->
+My diagnosis found three out-of-corpus questions clearing a 0.6 gate at
+0.5286–0.5826, so I moved the cutoff into the gap that actually separates my
+in-scope questions from out-of-corpus ones rather than the gap I had measured
+against absurd questions.
+
+I did not pick hybrid search or a second chunking strategy. Both were on the
+list and both are more interesting, but neither addresses what I found: my
+retrieval already returns the right thread at rank 1 for every in-scope
+question, so ranking was not the problem. The gate was.
+
+**Where 0.475 comes from.** My in-scope five top out at 0.4206 (the bike
+question). The nearest out-of-corpus question is laundry cost at 0.5286. That
+is the real gap — 0.108 wide, not the 0.4074 I originally claimed — and 0.475
+is its midpoint. The old 0.6 sat *inside* the out-of-corpus group rather than
+between the groups.
+
+| | Old gate (0.6) | New gate (0.475) |
+|---|---|---|
+| In-scope questions passed | 5 of 5 | 5 of 5 |
+| OUT_OF_SCOPE refused | 5 of 5 | 5 of 5 |
+| Near-miss questions refused | 4 of 7 | **7 of 7** |
+| Margin below cutoff for worst in-scope | 0.179 | **0.054** |
 
 ### Run Log — After
 
@@ -501,20 +604,98 @@ belongs in Diagnoses below.
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Retrieved chunk contains the answer | 4 of 5 |  |  |  |  |
-| 2. Every answer names a source | 5 of 5 |  |  |  |  |
-| 3. Gate stops out-of-corpus questions | 4 of 5 |  |  |  |  |
-| 4. No chunk is cut mid-sentence | 0 of 23 |  |  |  |  |
-| 5. No in-scope question comes back refused | 0 of 5 |  |  |  |  |
+| 1. Retrieved chunk contains the answer | 4 of 5 | 5 of 5 | 5 of 5 | 5 of 5 | MET |
+| 2. Every answer names a source | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 | MET |
+| 3. Gate stops out-of-corpus questions | 4 of 5 | 5 of 5 | 5 of 5 | 5 of 5 | MET |
+| 4. No chunk is cut mid-sentence | 0 of 23 | 0 of 23 | 0 of 23 | 0 of 23 | MET |
+| 5. No in-scope question comes back refused | 0 of 5 | 0 of 5 | 0 of 5 | 0 of 5 | MET |
+
+Source run: `results/run_2026-09-29_0032_after.md`, written by `run_eval.py::main`
+on 2026-09-29 — corpus `advice_threads`, top-k 3, cutoff **0.475**, three runs
+per question, caching off. 15 model calls, 10353 tokens. Same aggregation as the
+before table: one row per criterion, from a file that is one row per question.
+Criteria 3 and 4 are measured in one pass for the reasons given above.
+
+`scorer.py` doesn't exist yet, so `run_eval.py` left its own verdict column
+blank and printed `—` for each run. Every judgement in the table above is mine,
+made by reading the 15 answers in the run file against the rules in
+`criteria.md`.
+
+### Real output
+
+**Criterion 1 — the answer-bearing thread came back every time.** Scored off the
+`Sources retrieved` line. Rank 1 was the correct thread for all five questions in
+all three runs, unchanged from before:
+
+```
+### When do small local employers hire summer interns? — run 1
+
+- Best distance: 0.3418 (passed the gate)
+- Sources retrieved: thread_first_gen.txt, thread_internship_timing.txt, thread_laundry_timing.txt
+```
+
+**Criterion 2 — 15 of 15 answers name a file.** Still in three different formats,
+because the model picks its own:
+
+```
+Small and local places hire summer interns in February and March (*thread_internship_timing.txt*).
+```
+
+```
+You need 16GB of RAM, as 8GB may struggle by the final project and 16GB is considered the number worth paying for. This comes from `thread_laptop_specs.txt`.
+```
+
+```
+No, it is not weird to go to office hours without a specific question; saying something like "I'm following the lectures but I don't feel like I understand the shape of it" is completely normal. 
+
+This comes from *thread_office_hours_etiquette.txt*.
+```
+
+**Criterion 3 — 5 of 5 refused**, at 0.828–0.952 against the new 0.475 cutoff.
+The same five questions, further from the gate than before because the gate
+moved toward them.
+
+**Criterion 4 — 0 of 23.** The index was not rebuilt; `THRESHOLD` is read at
+query time and the chunker never ran. This row is carried over unchanged, which
+is itself the argument in Diagnoses for retiring it.
+
+**Criterion 5 — 0 refusals of 5.** Closest call is the bike question at 0.4206
+against 0.475: **0.054 of margin**, down from 0.179.
 
 **Did it help?**
 
-<!-- Say plainly whether it did, and how you know. If it made things worse,
-     say that — a change that backfired, honestly reported, earns full credit
-     and is more interesting than one that worked. What matters is that you can
-     tell.
+**Not by anything in the table above, and the table is the wrong place to look
+for it.**
 
-     Milestone 4. -->
+All five criteria read identically before and after — 5/5, 5/5, 5/5, 0/23, 0/5.
+So do the distances, to four decimal places: 0.2869, 0.3287, 0.3418, 0.3898,
+0.4206 in both runs. That isn't a coincidence and it isn't a null result. A
+threshold is a comparison applied *after* retrieval; it cannot move an embedding
+distance, so the only thing it can change is which side of the line a question
+falls on. None of my ten test questions changed sides, because all ten were
+already sorted correctly. **The change was invisible to my test suite by
+construction.**
+
+What it did change is measurable, just not here:
+
+| | Old gate (0.6) | New gate (0.475) |
+|---|---|---|
+| The five criteria above | all MET | all MET — no movement |
+| Near-miss questions refused | 4 of 7 | **7 of 7** |
+| Margin below cutoff for worst in-scope | 0.179 | **0.054** |
+
+The three questions that changed behaviour — laundry cost at 0.5286, best dorms
+at 0.5794, gym hours at 0.5826 — are the ones from my Diagnoses section, and
+they are not in `questions.py`. So the honest summary is: **the fix worked on
+the failure I found, and my test suite cannot see it.** I'd rather report that
+than quietly add the near-miss questions to `OUT_OF_SCOPE` and present a
+5-of-5 that the before run never had a chance to score.
+
+It also cost something real. The worst in-scope question now clears the gate by
+0.054 instead of 0.179. I traded margin I wasn't using against absurd questions
+for margin against plausible ones, which is the right trade on this corpus, but
+it is a trade and not a free win. If a legitimate in-scope question ever gets
+refused, this is the line that did it.
 
 ## What's Still Broken
 
@@ -526,9 +707,87 @@ belongs in Diagnoses below.
 
      Milestone 5. -->
 
+Against the five targets I wrote in unit 1, nothing is missed — they were all
+met before the fix and all met after it. So this section is about the tightened
+criterion 3 I proposed in Diagnoses, and about three things the run log does not
+show.
+
+**1. Criterion 3, under the definition I'd tighten it to, still fails.** The
+second half of that target was "no out-of-scope question scores below 0.65". My
+near-miss questions sit at 0.5286, 0.5794 and 0.5826. They are refused now, but
+only because the cutoff moved to meet them — they are still closer to my corpus
+than a question my corpus cannot answer should be.
+
+*What I'd do:* this is an embedding problem, not a threshold one, and moving the
+number again won't fix it. `thread_study_spots.txt` is the nearest neighbour for
+four of seven near-miss questions because shared campus vocabulary dominates the
+similarity score. The fix I'd try is the hybrid search option — BM25 alongside
+the embedding — on the theory that a keyword leg would score "gym", "dorms" and
+"wifi" near zero against a corpus that never uses those words, where the
+embedding gives them 0.55.
+
+*Why I stopped:* that is a second change, and the milestone asks for one. I'd
+rather report a small change I can attribute cleanly than two changes and no way
+to tell which did the work.
+
+**2. The new gate has very little margin.** The bike question passes at 0.4206
+against a 0.475 cutoff — 0.054 of room, down from 0.179. I chose the midpoint of
+a 0.108-wide gap, and a gap that narrow means the next question I write could
+land on either side of it. The old cutoff was safe and wrong; this one is
+correct and fragile. If a genuinely in-scope question ever gets refused, this is
+why, and criterion 5 is where it will show up.
+
+*Why I stopped:* the alternative is widening the gap rather than re-placing the
+cutoff inside it, which again means changing retrieval.
+
+**3. My near-miss questions aren't in the test.** They live in this README, not
+in `OUT_OF_SCOPE` in `questions.py`, so `run_eval.py` doesn't score them and a
+future change could silently undo this fix. I left them out deliberately —
+adding them would have changed what criterion 3 measures in the middle of a
+before/after comparison, and the two run logs would not be comparable. They
+should go in before any further work.
+
+**4. Criterion 5's scoring rule can't be trusted.** It matches the literal
+phrase "don't have enough information", and I have a real refusal from this unit
+that doesn't contain it. Every 0-of-5 I've recorded for criterion 5 is correct,
+but none of them is *evidence*, because the check would have returned 0 whether
+the model refused or not.
+
+*Why I stopped:* fixing it means rewriting a criterion mid-unit, and the whole
+point of writing them first is that I don't get to edit them once I've seen the
+results. It goes in the next unit's version.
+
 ## What I'd Do Differently
 
 <!-- Knowing what you know now — which of your five criteria would you write
      differently, and why?
 
      Milestone 5. -->
+
+**Criterion 3 — the one I'd change first.** Not the target number, the question
+set behind it. I wrote five out-of-scope questions about Mongolia, the World Cup
+and diesel engines, and they told me nothing: no system that retrieves anything
+at all would fail them. A refusal test is only worth running on questions that
+are *nearly* in scope. I'd require that most of the out-of-scope set be
+same-domain-different-topic, and I'd write those questions before measuring any
+distances, so I couldn't unconsciously pick ones I knew would sort cleanly.
+
+**Criterion 1 — I scored a bar three times looser than my system.** "In the top
+3" made sense when top-k was 5 and I hadn't measured anything. By the time I ran
+it, rank 1 was the correct thread for all five questions and rank 3 never came
+back under 0.7386. I'd write "rank 1" and accept that it's harder, because it's
+what the system actually does and it would catch a regression that "top 3"
+would hide.
+
+**Criterion 4 — I'd write it so it can fail.** "No chunk is cut mid-sentence"
+became unfalsifiable the moment I replaced the chunker with one that splits on
+reply boundaries; the splitter cannot produce the failure. I'd replace it with
+something that is still a real question after the fix — every chunk answerable
+without its neighbours, say, which I'd have to read the chunks to judge and
+could genuinely lose.
+
+**The general lesson.** Four of my five criteria were scored on inputs I chose
+after reading the corpus, and all five passed first time. I'd treated writing
+the criteria first as the safeguard, but writing them first doesn't help if I
+also write the test data. Next unit I'd fix the *questions* before I look at the
+documents, not just the targets.
