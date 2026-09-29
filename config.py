@@ -29,6 +29,13 @@ CORPUS = os.getenv("AI201_CORPUS", "advice_threads")
 
 CHUNK_SIZE = 800        # characters per chunk
 CHUNK_OVERLAP = 120     # characters shared between neighbouring chunks
+#
+# CHUNK_OVERLAP is only read by `chunker.py::fallback_split`, the starter's
+# original chunker, which I keep for comparison and no longer index with.
+# My `split_documents` splits on reply boundaries and has no overlap at all --
+# the stride it created (chunk_size - overlap = 680) is exactly what produced
+# the three junk fragments unit 1 diagnoses. Left at 120 so the before/after
+# comparison in the README still reproduces.
 
 
 # ─── Retrieval (Milestone 4) ─────────────────────────────────────────────────
@@ -43,7 +50,13 @@ TOP_K = 3               # how many chunks to pull back per question
 # 0.6 is a reasonable starting point, not a right answer. Milestone 4 has you
 # measure your own two groups of distances and put the cutoff in the gap.
 # Most corpora land somewhere between 0.45 and 0.75.
-THRESHOLD = 0.6
+#
+# Unit 2: lowered from 0.6 to 0.475. The 0.6 was placed in the gap between my
+# in-scope questions (0.2869-0.4206) and my OUT_OF_SCOPE five (0.8280-0.9517),
+# but that second group is all absurd questions. Campus-adjacent questions my
+# corpus doesn't cover land at 0.5286-0.5826 and cleared a 0.6 gate. The real
+# gap is 0.4206 to 0.5286; 0.475 is its midpoint.
+THRESHOLD = 0.475
 
 
 # ─── Models ──────────────────────────────────────────────────────────────────
